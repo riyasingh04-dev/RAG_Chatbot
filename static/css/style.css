@@ -1,0 +1,223 @@
+:root {
+    --bg-color: #ffffff;
+    --sidebar-bg: #f8f9fa;
+    --text-color: #1a1a1a;
+    --accent-color: #6366f1;
+    --message-ai: #f3f4f6;
+    --message-user: #6366f1;
+    --border-color: #e5e7eb;
+}
+
+body.dark-mode {
+    --bg-color: #0f172a;
+    --sidebar-bg: #1e293b;
+    --text-color: #f8fafc;
+    --accent-color: #818cf8;
+    --message-ai: #334155;
+    --message-user: #4f46e5;
+    --border-color: #334155;
+}
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+    font-family: 'Inter', sans-serif;
+}
+
+body {
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    transition: all 0.3s ease;
+    height: 100vh;
+    overflow: hidden;
+}
+
+.app-container {
+    display: flex;
+    height: 100vh;
+}
+
+/* Sidebar */
+.sidebar {
+    width: 280px;
+    background-color: var(--sidebar-bg);
+    border-right: 1px solid var(--border-color);
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+}
+
+.logo h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+}
+
+.logo span {
+    color: var(--accent-color);
+}
+
+.upload-section h3, .settings-section h3 {
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 1rem;
+    opacity: 0.8;
+}
+
+.file-drop-zone {
+    border: 2px dashed var(--border-color);
+    border-radius: 0.75rem;
+    padding: 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+
+.file-drop-zone:hover {
+    border-color: var(--accent-color);
+}
+
+.file-drop-zone p {
+    font-size: 0.875rem;
+    margin-bottom: 0.5rem;
+}
+
+.file-drop-zone span {
+    font-size: 0.75rem;
+    opacity: 0.6;
+}
+
+.file-list {
+    list-style: none;
+    margin-top: 1rem;
+    font-size: 0.875rem;
+}
+
+.file-list li {
+    padding: 0.5rem;
+    background: var(--bg-color);
+    margin-bottom: 0.5rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--border-color);
+}
+
+select {
+    width: 100%;
+    padding: 0.75rem;
+    background: var(--bg-color);
+    color: var(--text-color);
+    border: 1px solid var(--border-color);
+    border-radius: 0.5rem;
+    outline: none;
+}
+
+/* Chat Main Area */
+.chat-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.chat-header {
+    padding: 1rem 2rem;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.active-persona {
+    font-weight: 600;
+    color: var(--accent-color);
+}
+
+#theme-toggle {
+    background: none;
+    border: none;
+    font-size: 1.25rem;
+    cursor: pointer;
+}
+
+.chat-messages {
+    flex: 1;
+    padding: 2rem;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.message {
+    max-width: 80%;
+    padding: 1rem;
+    border-radius: 1rem;
+    line-height: 1.5;
+    font-size: 0.95rem;
+}
+
+.ai-message {
+    align-self: flex-start;
+    background-color: var(--message-ai);
+    border-bottom-left-radius: 0.25rem;
+}
+
+.user-message {
+    align-self: flex-end;
+    background-color: var(--message-user);
+    color: white;
+    border-bottom-right-radius: 0.25rem;
+}
+
+/* Chat Input */
+.chat-input-area {
+    padding: 1.5rem 2rem;
+    background-color: var(--bg-color);
+}
+
+#chat-form {
+    display: flex;
+    gap: 1rem;
+    position: relative;
+}
+
+#user-input {
+    flex: 1;
+    padding: 1rem 1.5rem;
+    border: 1px solid var(--border-color);
+    border-radius: 2rem;
+    background-color: var(--sidebar-bg);
+    color: var(--text-color);
+    outline: none;
+}
+
+#send-button {
+    background-color: var(--accent-color);
+    color: white;
+    border: none;
+    width: 3.5rem;
+    height: 3.5rem;
+    border-radius: 50%;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.2s;
+}
+
+#send-button:hover {
+    transform: scale(1.05);
+}
+
+#send-button svg {
+    width: 1.5rem;
+    height: 1.5rem;
+}
+
+.typing-indicator {
+    font-size: 0.75rem;
+    opacity: 0.6;
+    margin-bottom: 0.5rem;
+    display: none;
+}
