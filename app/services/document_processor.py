@@ -4,6 +4,7 @@ import json
 from typing import List
 import pandas as pd
 import nbformat
+from bs4 import BeautifulSoup
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
@@ -33,47 +34,52 @@ class DocumentProcessor:
                 loader = PyPDFLoader(file_path)
                 docs = loader.load()
                 
+                docs = loader.load()
+                
                 # --- Visual RAG: Extract Images for Page Previews ---
-                try:
-                    import pytesseract
-                    from pdf2image import convert_from_path
-                    
-                    # Ensure output directory exists (relative to app root or static folder)
-                    # We'll save to d:\RAG_Chatbot\static\extracted_images
-                    output_dir = os.path.join(os.getcwd(), "static", "extracted_images")
-                    os.makedirs(output_dir, exist_ok=True)
-                    
-                    # Configure Poppler
-                    poppler_path = settings.POPPLER_PATH.strip('"\'') if settings.POPPLER_PATH else None
-                    if poppler_path and not os.path.exists(poppler_path):
-                         # Try auto-correction logic again just in case
-                         if os.path.exists(os.path.join(poppler_path, "Library", "bin")):
-                             poppler_path = os.path.join(poppler_path, "Library", "bin")
-                         elif os.path.exists(os.path.join(poppler_path, "bin")):
-                             poppler_path = os.path.join(poppler_path, "bin")
-
-                    logger.info(f"Generating page previews for: {file_name}")
-                    images = convert_from_path(file_path, poppler_path=poppler_path)
-                    
-                    # Save images and update doc metadata
-                    # We map images to docs by page number. PyPDFLoader pages are 0-indexed.
-                    for i, image in enumerate(images):
-                        image_filename = f"{file_name}_{i}.jpg"
-                        image_path = os.path.join(output_dir, image_filename)
-                        image.save(image_path, "JPEG")
+                if not settings.TEXT_ONLY_MODE:
+                    try:
+                        import pytesseract
+                        from pdf2image import convert_from_path
                         
-                        # Find the matching document chunk (or chunks) for this page
-                        # Note: PyPDFLoader might split a page into multiple docs if using specific splitters, 
-                        # but standard load() usually gives one doc per page.
-                        for doc in docs:
-                            if doc.metadata.get("page") == i:
-                                doc.metadata["image_url"] = f"/static/extracted_images/{image_filename}"
-                                
-                    logger.info(f"Saved {len(images)} page previews for {file_name}")
-
-                except Exception as img_err:
-                    logger.error(f"Failed to generate page previews for {file_name}: {img_err}")
-                    # Non-fatal: continue with text only
+                        # Ensure output directory exists (relative to app root or static folder)
+                        # We'll save to d:\RAG_Chatbot\static\extracted_images
+                        output_dir = os.path.join(os.getcwd(), "static", "extracted_images")
+                        os.makedirs(output_dir, exist_ok=True)
+                        
+                        # Configure Poppler
+                        poppler_path = settings.POPPLER_PATH.strip('"\'') if settings.POPPLER_PATH else None
+                        if poppler_path and not os.path.exists(poppler_path):
+                             # Try auto-correction logic again just in case
+                             if os.path.exists(os.path.join(poppler_path, "Library", "bin")):
+                                 poppler_path = os.path.join(poppler_path, "Library", "bin")
+                             elif os.path.exists(os.path.join(poppler_path, "bin")):
+                                 poppler_path = os.path.join(poppler_path, "bin")
+    
+                        logger.info(f"Generating page previews for: {file_name}")
+                        images = convert_from_path(file_path, poppler_path=poppler_path)
+                        
+                        # Save images and update doc metadata
+                        # We map images to docs by page number. PyPDFLoader pages are 0-indexed.
+                        for i, image in enumerate(images):
+                            image_filename = f"{file_name}_{i}.jpg"
+                            image_path = os.path.join(output_dir, image_filename)
+                            image.save(image_path, "JPEG")
+                            
+                            # Find the matching document chunk (or chunks) for this page
+                            # Note: PyPDFLoader might split a page into multiple docs if using specific splitters, 
+                            # but standard load() usually gives one doc per page.
+                            for doc in docs:
+                                if doc.metadata.get("page") == i:
+                                    doc.metadata["image_url"] = f"/static/extracted_images/{image_filename}"
+                                    
+                        logger.info(f"Saved {len(images)} page previews for {file_name}")
+    
+                    except Exception as img_err:
+                        logger.error(f"Failed to generate page previews for {file_name}: {img_err}")
+                        # Non-fatal: continue with text only
+                else:
+                    logger.info(f"Skipping page preview generation for {file_name} (TEXT_ONLY_MODE enabled)")
                 # ----------------------------------------------------
 
                 # check if the PDF is scanned or empty
@@ -232,6 +238,33 @@ class DocumentProcessor:
                 except Exception as py_err:
                     logger.error(f"Failed to load python file {file_name}: {py_err}")
                     return []
+
+            elif ext in [".html", ".htm"]:
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        soup = BeautifulSoup(f, "html.parser")
+                        
+                    # Remove script and style elements
+                    for script in soup(["script", "style"]):
+                        script.decompose()
+                        
+                    text = soup.get_text(separator="\n")
+                    # Clean up whitespace
+                    lines = (line.strip() for line in text.splitlines())
+                    chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
+                    text = '\n'.join(chunk for chunk in chunks if chunk)
+                    
+                    if len(text) < 50:
+                        raise Exception("Uploaded file contains insufficient readable text")
+                        
+                    docs = [Document(page_content=text)]
+                except Exception as html_err:
+                    logger.error(f"Failed to load HTML file {file_name}: {html_err}")
+                    # Raise validation error to user if strictly invalid
+                    if "insufficient readable text" in str(html_err):
+                         raise html_err
+                    return []
+            
             
             else:
                 logger.warning(f"Unsupported extension: {ext}")
@@ -266,6 +299,13 @@ class DocumentProcessor:
             return []
             
         chunks = self.text_splitter.split_documents(all_docs)
+        
+        # Add chunk_id to metadata
+        import uuid
+        for i, chunk in enumerate(chunks):
+            chunk.metadata["chunk_id"] = str(uuid.uuid4())
+            chunk.metadata["chunk_index"] = i
+            
         logger.info(f"Created {len(chunks)} chunks from {len(file_paths)} files.")
         
         return chunks

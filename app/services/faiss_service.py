@@ -71,6 +71,46 @@ class FAISSService:
             
         logger.info(f"Indexed {len(chunks)} new chunks. Total docs: {len(all_docs)}")
 
+    def delete_documents_by_file(self, file_name: str):
+        """Removes all documents belonging to a specific file from FAISS and BM25."""
+        if self.vector_db is None:
+            return
+
+        # 1. Identify IDs to remove
+        ids_to_remove = []
+        for doc_id, doc in self.vector_db.docstore._dict.items():
+            if doc.metadata.get("file_name") == file_name:
+                ids_to_remove.append(doc_id)
+
+        if not ids_to_remove:
+            logger.warning(f"No documents found for file: {file_name}")
+            return
+
+        # 2. Delete from FAISS
+        self.vector_db.delete(ids_to_remove)
+        logger.info(f"Deleted {len(ids_to_remove)} chunks for file: {file_name}")
+
+        # 3. Re-build BM25 retriever
+        all_docs = list(self.vector_db.docstore._dict.values())
+        if all_docs:
+            self.bm25_retriever = BM25Retriever.from_documents(all_docs)
+            self.bm25_retriever.k = 50
+        else:
+            self.bm25_retriever = None
+
+        # 4. Save updated indices
+        os.makedirs(self.index_path, exist_ok=True)
+        self.vector_db.save_local(self.index_path)
+        
+        bm25_path = os.path.join(self.index_path, "bm25_retriever.pkl")
+        if self.bm25_retriever:
+            with open(bm25_path, "wb") as f:
+                pickle.dump(self.bm25_retriever, f)
+        elif os.path.exists(bm25_path):
+            os.remove(bm25_path)
+            
+        logger.info(f"Index updated after deleting {file_name}. Remaining total docs: {len(all_docs)}")
+
     def get_hybrid_retriever(self, semantic_weight: float = 0.8, keyword_weight: float = 0.2):
         """Returns an EnsembleRetriever combining FAISS and BM25."""
         if not self.vector_db or not self.bm25_retriever:

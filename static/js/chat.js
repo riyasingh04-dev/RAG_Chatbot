@@ -54,6 +54,22 @@ function logout() {
 }
 
 fetchUserInfo();
+fetchFiles();
+
+async function fetchFiles() {
+    try {
+        const res = await fetch('/api/v1/documents');
+        if (res.ok) {
+            const files = await res.json();
+            fileList.innerHTML = ''; // Clear existing
+            files.forEach(filename => {
+                addFileToList(filename, 'success');
+            });
+        }
+    } catch (err) {
+        console.error('Failed to fetch files:', err);
+    }
+}
 
 const sessionId = Math.random().toString(36).substring(7);
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -86,11 +102,24 @@ ws.onmessage = (event) => {
                     // Avoid duplicates
                     if (!sourcesContainer.querySelector(`[src="${source.image_url}"]`) && source.image_url) {
                         sourcesContainer.classList.remove('hidden');
+
+                        // Create wrapper for image + caption
+                        const wrapper = document.createElement('div');
+                        wrapper.className = "relative group";
+
                         const img = document.createElement('img');
                         img.src = source.image_url;
-                        img.className = "rounded-lg border border-slate-700 shadow-md hover:scale-105 transition-transform cursor-pointer";
+                        img.className = "w-full rounded-lg border border-slate-700 shadow-md hover:scale-105 transition-transform cursor-pointer object-cover";
                         img.onclick = () => window.open(source.image_url, '_blank');
-                        sourcesContainer.appendChild(img);
+
+                        // Caption overlay
+                        const caption = document.createElement('div');
+                        caption.className = "absolute bottom-0 left-0 right-0 bg-black/70 text-[10px] text-white p-1 rounded-b-lg opacity-0 group-hover:opacity-100 transition-opacity truncate";
+                        caption.textContent = `${source.title} (Pg ${source.page})`;
+
+                        wrapper.appendChild(img);
+                        wrapper.appendChild(caption);
+                        sourcesContainer.appendChild(wrapper);
                     }
                 });
             }
@@ -112,14 +141,7 @@ fileInput.onchange = async () => {
 
     files.forEach(file => {
         formData.append('files', file);
-        const li = document.createElement('li');
-        li.className = "text-xs p-2 bg-slate-800/50 border border-slate-700 rounded flex items-center justify-between animate-in fade-in zoom-in duration-300";
-        li.innerHTML = `
-            <span class="truncate pr-2">${file.name}</span>
-            <span class="status-icon animate-pulse text-indigo-400">⏳</span>
-        `;
-        fileList.appendChild(li);
-        fileMap.set(file.name, li);
+        addFileToList(file.name, 'loading', fileMap);
     });
 
     try {
@@ -138,44 +160,20 @@ fileInput.onchange = async () => {
         if (res.ok) {
             // Success
             files.forEach(file => {
-                const li = fileMap.get(file.name);
-                if (li) {
-                    li.className = "text-xs p-2 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded flex items-center justify-between";
-                    li.innerHTML = `
-                        <span class="truncate pr-2">${file.name}</span>
-                        <span class="text-emerald-500">✅</span>
-                    `;
-                }
+                addFileToList(file.name, 'success', fileMap);
             });
         } else {
             // Server Error (e.g. OCR failed)
             const errorMsg = result.detail || 'Upload failed';
             console.error('Server error:', errorMsg);
             files.forEach(file => {
-                const li = fileMap.get(file.name);
-                if (li) {
-                    li.className = "text-xs p-2 bg-red-500/10 border border-red-500/20 text-red-400 rounded flex flex-col gap-1";
-                    li.innerHTML = `
-                        <div class="flex items-center justify-between w-full font-medium">
-                            <span class="truncate pr-2">${file.name}</span>
-                            <span>❌</span>
-                        </div>
-                        <p class="text-[10px] leading-tight text-red-300 opacity-80">${errorMsg}</p>
-                    `;
-                }
+                addFileToList(file.name, 'error', fileMap, errorMsg);
             });
         }
     } catch (error) {
         console.error('Network or JS error:', error);
         files.forEach(file => {
-            const li = fileMap.get(file.name);
-            if (li) {
-                li.className = "text-xs p-2 bg-red-500/10 border border-red-500/20 text-red-400 rounded flex items-center justify-between";
-                li.innerHTML = `
-                    <span class="truncate pr-2">Network Error</span>
-                    <span class="text-red-500">⚠️</span>
-                `;
-            }
+            addFileToList(file.name, 'error', fileMap, 'Network Error');
         });
     }
 
@@ -240,6 +238,111 @@ function appendMessage(role, text) {
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
     return div;
+}
+
+function addFileToList(filename, status, map = null, errorMessage = '') {
+    let li = map ? map.get(filename) : null;
+    if (!li) {
+        li = document.createElement('li');
+        fileList.appendChild(li);
+        if (map) map.set(filename, li);
+    }
+
+    if (status === 'loading') {
+        li.className = "text-xs p-2.5 bg-slate-800/50 border border-slate-700 rounded-xl flex items-center justify-between animate-in fade-in zoom-in duration-300";
+        li.innerHTML = `
+            <div class="min-w-0 flex-1 mr-2">
+                <p class="truncate text-slate-400">${filename}</p>
+            </div>
+            <span class="animate-spin text-indigo-400 text-[10px] flex-shrink-0">⏳</span>
+        `;
+    } else if (status === 'success') {
+        console.log(`Rendering success state for: ${filename}`);
+        li.className = "text-xs p-2.5 bg-emerald-500/5 border border-emerald-500/20 rounded-xl flex items-center justify-between group/item hover:bg-emerald-500/10 transition-colors";
+        li.innerHTML = `
+            <div class="min-w-0 flex-1 mr-2">
+                <p class="truncate text-emerald-100 font-medium">${filename}</p>
+            </div>
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <span class="text-emerald-500 text-[10px]">✅</span>
+                <button onclick="deleteFile('${filename.replace(/'/g, "\\'")}', this.closest('li'))" 
+                        class="w-8 h-8 flex items-center justify-center rounded-lg bg-slate-800 text-slate-400 hover:bg-red-500/20 hover:text-red-400 transition-all border border-slate-700 hover:border-red-500/30"
+                        title="Delete file">
+                    🗑️
+                </button>
+            </div>
+        `;
+    } else if (status === 'error') {
+        li.className = "text-xs p-2.5 bg-red-500/5 border border-red-500/20 rounded-xl flex flex-col gap-1";
+        li.innerHTML = `
+            <div class="flex items-center justify-between w-full">
+                <div class="min-w-0 flex-1 mr-2">
+                    <p class="truncate text-red-100 font-medium">${filename}</p>
+                </div>
+                <span class="text-red-500 flex-shrink-0">❌</span>
+            </div>
+            ${errorMessage ? `<p class="text-[10px] leading-tight text-red-400/80">${errorMessage}</p>` : ''}
+        `;
+    }
+}
+
+async function deleteFile(filename, li) {
+    const originalContent = li.innerHTML;
+    const statusIcon = li.querySelector('.text-emerald-500') || li.querySelector('button');
+
+    // Show loading
+    li.innerHTML = `
+        <span class="truncate pr-2 text-slate-400">${filename}</span>
+        <span class="animate-spin text-indigo-400 text-[10px]">⏳</span>
+    `;
+
+    try {
+        const res = await fetch(`/api/v1/documents/${encodeURIComponent(filename)}`, {
+            method: 'DELETE'
+        });
+
+        if (res.ok) {
+            li.classList.add('fade-out');
+            setTimeout(() => li.remove(), 300);
+            showToast('File deleted successfully', 'success');
+        } else {
+            throw new Error('Delete failed');
+        }
+    } catch (err) {
+        console.error('Delete error:', err);
+        li.innerHTML = `
+            <span class="truncate pr-2 text-red-400">${filename}</span>
+            <span class="text-red-500" title="${err.message}">❌</span>
+        `;
+        showToast('Failed to delete file', 'error');
+        // Reset after 3 seconds
+        setTimeout(() => {
+            if (li.parentElement) li.innerHTML = originalContent;
+        }, 3000);
+    }
+}
+
+function showToast(message, type = 'success') {
+    let toastContainer = document.getElementById('toast-container');
+    if (!toastContainer) {
+        toastContainer = document.createElement('div');
+        toastContainer.id = 'toast-container';
+        toastContainer.className = 'fixed bottom-24 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-2 pointer-events-none';
+        document.body.appendChild(toastContainer);
+    }
+
+    const toast = document.createElement('div');
+    const bgColor = type === 'success' ? 'bg-emerald-600' : 'bg-red-600';
+    toast.className = `${bgColor} text-white px-6 py-3 rounded-full shadow-2xl text-sm font-medium animate-in slide-in-from-bottom duration-300 pointer-events-auto`;
+    toast.textContent = message;
+
+    toastContainer.appendChild(toast);
+
+    setTimeout(() => {
+        toast.classList.replace('animate-in', 'animate-out');
+        toast.classList.add('fade-out');
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
 }
 
 const json = {

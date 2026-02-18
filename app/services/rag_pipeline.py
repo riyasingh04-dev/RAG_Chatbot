@@ -1,9 +1,13 @@
-from typing import List
+from typing import List, Optional
+import asyncio
 from langchain_core.documents import Document
 from loguru import logger
 from app.services.faiss_service import faiss_service
 from app.core.config import settings
 from app.services.reranker import reranker
+# Import llm_service cleanly to avoid circular dependency issues at module level if any
+# We will use lazy import inside methods if needed, but top level is likely fine given dependency graph.
+from app.services.llm_service import llm_service
 
 class RagRetriever:
     def __init__(self, top_k: int = 25, top_n: int = 15):
@@ -16,15 +20,57 @@ class RagRetriever:
         query_lower = query.lower()
         return any(keyword in query_lower for keyword in comparison_keywords)
 
+    async def _translate_query_if_needed(self, query: str) -> str:
+        """
+        Detects if query is non-English (simple heuristic + LLM check) and translates to English.
+        """
+        # 1. Heuristic: Check for non-ASCII characters (e.g., Hindi, Chinese, etc.)
+        # This is a fast check. If mostly ASCII, we assume English/Code and skip translation to save latency.
+        is_ascii = all(ord(c) < 128 for c in query.replace(" ", ""))
+        if is_ascii:
+            return query
+
+        # 2. LLM Translation
+        logger.info(f"Non-ASCII characters detected in query: '{query}'. Attempting translation...")
+        try:
+            # We use a direct minimal prompt for translation
+            system_prompt = (
+                "You are a precise translator. Translate the following user query to English "
+                "so it can be used for vector retrieval. Output ONLY the translated query. "
+                "Do not explain. If it is already English, output it as is."
+            )
+            
+            # Using llm_service helper if available, or direct call. 
+            # llm_service.generate_response is a generator, so we collect needed parts.
+            # We'll create a lightweight non-streaming call or just collect the stream.
+            translated = ""
+            async for chunk in llm_service.generate_response(
+                query=query,
+                context=" ", # Dummy context to bypass strict safeguards in generate_response if any, or we should add a specific simple method in llm_service
+                role="Research AI", # Use a standard role
+                chat_history=[]
+            ):
+                translated += chunk
+            
+            # Cleanup
+            translated = translated.strip().strip('"')
+            logger.info(f"Translated query: '{query}' -> '{translated}'")
+            return translated
+        except Exception as e:
+            logger.error(f"Translation failed: {e}")
+            return query
+
     def _extract_entities(self, query: str) -> list:
         """Extract potential entity names from query (simple keyword extraction)."""
         import re
         words = query.split()
         entities = []
+        skip_words = {"resume", "cv", "vs", "versus", "compare", "difference", "between", "and", "or", "better", "experience", "skills"}
+        
         for word in words:
-            # Remove punctuation and check if starts with capital
+            # Remove punctuation
             clean_word = re.sub(r'[^\w\s]', '', word)
-            if clean_word and clean_word[0].isupper() and len(clean_word) > 2:
+            if clean_word and clean_word[0].isupper() and len(clean_word) > 2 and clean_word.lower() not in skip_words:
                 entities.append(clean_word)
         return entities
 
@@ -34,14 +80,14 @@ class RagRetriever:
         Runs separate retrievals for each entity and combines results.
         """
         all_docs = []
-        seen_content = set()  # Use content hash to avoid duplicates
+        seen_ids = set() 
         
         logger.info(f"Running multi-entity retrieval for: {entities}")
         
         # Detect if this is a resume comparison
         is_resume_query = any(keyword in query.lower() for keyword in ['resume', 'cv', 'experience', 'skills', 'background', 'qualification'])
         
-        # Retrieve for each entity (top 5 from each to ensure balanced representation)
+        # Retrieve for each entity
         for entity in entities:
             # Build entity-specific query
             if is_resume_query:
@@ -54,75 +100,75 @@ class RagRetriever:
             # Get initial docs
             import time
             start_retrieval = time.time()
-            base_docs = faiss_service.similarity_search(entity_query, k=self.top_k)
+            # Increase k for candidate generation to ensure we get the right person's doc
+            base_docs = faiss_service.similarity_search(entity_query, k=max(self.top_k, 50))
+            
+            # Verify we actually got docs for this entity (simple keyword check in source/content)
+            # If not, retry with even higher k
+            entity_docs_filtered = [d for d in base_docs if entity.lower() in d.page_content.lower() or entity.lower() in d.metadata.get("source", "").lower()]
+            
+            if not entity_docs_filtered:
+                 logger.warning(f"No specific docs found for {entity} with k={self.top_k}, retrying with k=100")
+                 base_docs = faiss_service.similarity_search(entity_query, k=100)
+            
             retrieval_time = time.time() - start_retrieval
             if settings.DEBUG_RAG:
-                logger.debug(f"Entity '{entity}': retrieved {len(base_docs)} candidate chunks from hybrid retriever (latency={retrieval_time:.3f}s)")
+                logger.debug(f"Entity '{entity}': retrieved {len(base_docs)} candidate chunks (latency={retrieval_time:.3f}s)")
+            
             if base_docs:
-                # Log sources before rerank
-                pre_sources = [d.metadata.get("file_name") or d.metadata.get("source") for d in base_docs]
-                logger.debug(f"Entity '{entity}': pre-rerank sources: {pre_sources}")
-
                 # Rerank
-                # Rerank and time it
                 start_rerank = time.time()
-                entity_docs = reranker.rerank(entity_query, base_docs, top_n=7)
+                # Use a good top_n for this entity
+                reranked_docs = reranker.rerank(entity_query, base_docs, top_n=10)
                 rerank_time = time.time() - start_rerank
+                
                 # record rerank metric
                 try:
                     from app.services.metrics import record_rerank
                     record_rerank(rerank_time)
                 except Exception:
                     pass
-                if settings.DEBUG_RAG:
-                    logger.debug(f"Entity '{entity}': post-rerank returned {len(entity_docs)} chunks (latency={rerank_time:.3f}s)")
-                    post_sources = [d.metadata.get("file_name") or d.metadata.get("source") for d in entity_docs]
-                    logger.debug(f"Entity '{entity}': post-rerank sources: {post_sources}")
 
-                # Take top 5 from this entity
-                for doc in entity_docs[:5]:
-                    # Use the document `source` (full path) or `file_name` as the
-                    # de-duplication key so separate files are not collapsed by
-                    # short-content collisions. Fall back to a content hash only
-                    # if no metadata is present.
-                    source_key = doc.metadata.get("source") or doc.metadata.get("file_name")
-                    if not source_key:
-                        source_key = str(hash(doc.page_content))
-
-                    if source_key not in seen_content:
+                # Add to all_docs with deduplication
+                added_count = 0
+                for doc in reranked_docs:
+                    # Deduplicate by unique chunk_id if available, else standard fallback
+                    # We WANT multiple chunks from the same file, just not the exact same chunk.
+                    unique_id = doc.metadata.get("chunk_id")
+                    if not unique_id:
+                        # Fallback signature: source + page + content_start
+                        unique_id = f"{doc.metadata.get('source')}_{doc.metadata.get('page')}_{hash(doc.page_content[:50])}"
+                    
+                    if unique_id not in seen_ids:
                         all_docs.append(doc)
-                        seen_content.add(source_key)
+                        seen_ids.add(unique_id)
+                        added_count += 1
+                        # Limit per entity to avoid overwhelming context
+                        if added_count >= 7:
+                            break
         
-        # Fill remaining slots with original query results if needed
-        if len(all_docs) < self.top_n:
-            logger.info("Filling remaining slots with original query results")
-            start_retrieval = time.time()
-            base_docs = faiss_service.similarity_search(query, k=self.top_k)
-            retrieval_time = time.time() - start_retrieval
-            if settings.DEBUG_RAG:
-                logger.debug(f"Original query retrieval returned {len(base_docs)} candidates (latency={retrieval_time:.3f}s)")
-            if base_docs:
-                start_rerank = time.time()
-                original_docs = reranker.rerank(query, base_docs, top_n=self.top_n)
-                rerank_time = time.time() - start_rerank
-                if settings.DEBUG_RAG:
-                    logger.debug(f"Original query: post-rerank returned {len(original_docs)} chunks (latency={rerank_time:.3f}s)")
-                for doc in original_docs:
-                    if len(all_docs) >= self.top_n:
-                        break
-                    source_key = doc.metadata.get("source") or doc.metadata.get("file_name")
-                    if not source_key:
-                        source_key = str(hash(doc.page_content))
-
-                    if source_key not in seen_content:
-                        all_docs.append(doc)
-                        seen_content.add(source_key)
+        # If we still have very few docs, fallback to standard retrieval
+        if len(all_docs) < 3:
+            logger.info("Multi-entity retrieval yielded few results, falling back to standard retrieval.")
+            extra_docs = faiss_service.similarity_search(query, k=self.top_k)
+            reranked_extra = reranker.rerank(query, extra_docs, top_n=self.top_n)
+            for doc in reranked_extra:
+                unique_id = doc.metadata.get("chunk_id")
+                if not unique_id:
+                    unique_id = f"{doc.metadata.get('source')}_{doc.metadata.get('page')}_{hash(doc.page_content[:50])}"
+                
+                if unique_id not in seen_ids:
+                    all_docs.append(doc)
+                    seen_ids.add(unique_id)
         
         logger.info(f"Multi-entity retrieval returned {len(all_docs)} documents")
         return all_docs[:self.top_n]
 
-    def retrieve(self, query: str) -> List[Document]:
+    async def retrieve(self, query: str) -> List[Document]:
         """Full retrieval pipeline with comparison query support."""
+        
+        # Translate if needed
+        query = await self._translate_query_if_needed(query)
         logger.info(f"Retrieving documents for query: {query}")
         
         # Check if this is a comparison query

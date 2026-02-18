@@ -38,7 +38,7 @@ async def upload_documents(files: List[UploadFile] = File(...)):
 @router.post("/chat")
 async def chat_endpoint(request: ChatRequest):
     # Retrieve Documents with hybrid search and reranking (so we can log counts/previews)
-    docs = rag_retriever.retrieve(request.message)
+    docs = await rag_retriever.retrieve(request.message)
 
     # Debug: list retrieved sources
     try:

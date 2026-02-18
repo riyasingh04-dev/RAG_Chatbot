@@ -40,8 +40,10 @@ async def websocket_chat(websocket: WebSocket, session_id: str, token: str = Non
             
             # 2. Retrieve Context (with hybrid search and reranking)
             logger.debug("Retrieving context...")
+            # 2. Retrieve Context (with hybrid search and reranking)
+            logger.debug("Retrieving context...")
             # Use .retrieve() to get Document objects so we can pass raw content to the LLM
-            context_docs = rag_retriever.retrieve(query)
+            context_docs = await rag_retriever.retrieve(query)
             logger.info(f"Context retrieved (len: {len(context_docs)})")
             # Debug: list files retrieved
             try:
@@ -59,13 +61,25 @@ async def websocket_chat(websocket: WebSocket, session_id: str, token: str = Non
             # 3. Stream LLM Response & Sources
             
             # Extract sources from context to send to UI
+            # Fix: Only show sources that are actually in the top context.
             sources = []
-            seen_images = set()
-            for doc in context_docs:
-                img_url = doc.metadata.get("image_url")
-                if img_url and img_url not in seen_images:
-                    sources.append({"image_url": img_url, "title": doc.metadata.get("file_name", "Document")})
-                    seen_images.add(img_url)
+            
+            if not settings.TEXT_ONLY_MODE:
+                seen_images = set()
+                
+                # We want to show images associated with the *specific chunks* retrieved.
+                # If a chunk has an image_url, we show it.
+                for doc in context_docs:
+                    img_url = doc.metadata.get("image_url")
+                    if img_url and img_url not in seen_images:
+                        # Verify this is a relevant page. 
+                        # If we have chunk_id, it means this is a precise chunk.
+                        sources.append({
+                            "image_url": img_url, 
+                            "title": doc.metadata.get("file_name", "Document"),
+                            "page": doc.metadata.get("page", 0) + 1
+                        })
+                        seen_images.add(img_url)
             
             # Send sources immediately if available
             if sources:
