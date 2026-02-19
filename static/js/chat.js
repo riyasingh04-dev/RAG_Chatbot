@@ -75,7 +75,7 @@ const sessionId = Math.random().toString(36).substring(7);
 const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
 const ws = new WebSocket(`${wsProtocol}//${window.location.host}/api/v1/chat/ws/chat/${sessionId}?token=${token}`);
 
-ws.onmessage = (event) => {
+ws.onmessage = async (event) => {
     const data = JSON.parse(event.data);
     if (data.type === 'error' && data.content === 'Unauthorized') {
         localStorage.removeItem('token');
@@ -91,13 +91,58 @@ ws.onmessage = (event) => {
         const textEl = lastMsg.querySelector('.msg-content');
         // Accumulate raw text in a data attribute
         lastMsg.dataset.raw = (lastMsg.dataset.raw || '') + data.content;
+
         // Parse and render accumulated markdown
         textEl.innerHTML = marked.parse(lastMsg.dataset.raw);
 
-        // Handle Sources/Images if present in the chunk metadata
+        // --- Visual RAG Enhancement: Prioritize Visuals ---
+        // Check for Markdown images or Mermaid blocks in the accumulated text
+        const hasImage = /!\[.*?\]\((.*?)\)/.test(lastMsg.dataset.raw);
+        const hasMermaid = lastMsg.dataset.raw.includes('```mermaid');
+
+        if (hasImage || hasMermaid) {
+            // Hide the standard sources container if a prioritized visual is present
+            const stdSources = lastMsg.querySelector('.sources-container');
+            if (stdSources) stdSources.classList.add('hidden');
+
+            // Ensure we have a prioritized visual container
+            let visualContainer = lastMsg.querySelector('.prioritized-visual-container');
+            if (!visualContainer) {
+                visualContainer = document.createElement('div');
+                visualContainer.className = "prioritized-visual-container mt-4 space-y-4";
+                textEl.after(visualContainer);
+            }
+
+            // Handle Mermaid rendering
+            if (hasMermaid) {
+                const mermaidBlocks = lastMsg.dataset.raw.match(/```mermaid([\s\S]*?)```/g);
+                if (mermaidBlocks) {
+                    visualContainer.innerHTML = ''; // Clear and re-render to avoid duplicates or partials
+                    for (let block of mermaidBlocks) {
+                        const code = block.replace(/```mermaid|```/g, '').trim();
+                        const id = 'mermaid-' + Math.random().toString(36).substring(7);
+                        const graphDiv = document.createElement('div');
+                        graphDiv.className = "bg-slate-900/50 p-4 rounded-xl border border-slate-700 overflow-x-auto";
+                        graphDiv.id = id;
+                        visualContainer.appendChild(graphDiv);
+                        try {
+                            const { render } = mermaid;
+                            const { svg } = await render(id + '-svg', code);
+                            graphDiv.innerHTML = svg;
+                        } catch (err) {
+                            console.error('Mermaid render failed:', err);
+                            graphDiv.innerHTML = `<p class="text-[10px] text-red-500">Visualization failed to render. Reference: ${id}</p>`;
+                        }
+                    }
+                }
+            }
+        }
+        // ----------------------------------------------------
+
+        // Handle Sources/Images if present in the chunk metadata (fallback/standard)
         if (data.sources && data.sources.length > 0) {
             const sourcesContainer = lastMsg.querySelector('.sources-container');
-            if (sourcesContainer) {
+            if (sourcesContainer && !lastMsg.querySelector('.prioritized-visual-container')) {
                 data.sources.forEach(source => {
                     // Avoid duplicates
                     if (!sourcesContainer.querySelector(`[src="${source.image_url}"]`) && source.image_url) {

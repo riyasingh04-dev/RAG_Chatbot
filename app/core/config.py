@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     MODEL_NAME: str = "llama3-70b-8192"
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     DEBUG_RAG: bool = False
-    TEXT_ONLY_MODE: bool = True
+    TEXT_ONLY_MODE: bool = False
 
     # Paths
     UPLOAD_DIR: str = "data/uploads"

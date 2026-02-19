@@ -54,12 +54,21 @@ async def chat_endpoint(request: ChatRequest):
         top_preview = docs[0].page_content[:200].replace('\n', ' ')
         logger.debug(f"Top chunk preview (200 chars): {top_preview}")
 
-    # Build context string for LLM
+    # Build context string for LLM with metadata and image references
     context = ""
     if docs:
         parts = []
         for doc in docs:
-            parts.append(doc.page_content.replace("\n", " ").strip())
+            source = doc.metadata.get("file_name", "Source")
+            page = doc.metadata.get("page", "?")
+            img_url = doc.metadata.get("image_url")
+            content = doc.page_content.replace("\n", " ").strip()
+            
+            header = f"[Source: {source} (Pg {page})]"
+            if img_url:
+                header += f"\n[Image Reference: {img_url}]"
+                
+            parts.append(f"{header}\n{content}")
         context = "\n\n---\n\n".join(parts)
 
     # If no context, immediately return the required fallback message

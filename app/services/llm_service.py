@@ -51,23 +51,23 @@ class LLMService:
             preview = ""
         logger.debug(f"LLMService Query: {query}")
         logger.debug(f"Context preview (200 chars): {preview}")
-        
+        logger.info(f"System Prompt (truncated): {system_prompt[:200]}...")
+
+        # Prepare messages for LLM
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=query)
         ]
-        
-        logger.info(f"System Prompt (truncated): {system_prompt[:200]}...")
-        
+
         try:
-            full_response = ""
+            full_response = "" # Keep track of full response for logging
             async for chunk in self.llm.astream(messages):
                 if chunk.content:
                     full_response += chunk.content
                     yield chunk.content
             logger.info(f"LLM Response generated successfully. Length: {len(full_response)}")
         except Exception as e:
-            logger.error(f"Error during LLM generation: {e}")
-            yield f"I'm sorry, I encountered an error while generating the response: {str(e)}"
+            logger.error(f"Error calling LLM: {str(e)}")
+            yield f"I'm sorry, I encountered an error: {str(e)}"
 
 llm_service = LLMService()

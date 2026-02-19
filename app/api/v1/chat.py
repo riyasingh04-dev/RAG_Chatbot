@@ -60,38 +60,59 @@ async def websocket_chat(websocket: WebSocket, session_id: str, token: str = Non
             
             # 3. Stream LLM Response & Sources
             
+            # Detect visual intent
+            is_visual_intent = rag_retriever._is_visual_query(query)
+            logger.info(f"Visual intent detected: {is_visual_intent}")
+
             # Extract sources from context to send to UI
-            # Fix: Only show sources that are actually in the top context.
             sources = []
             
-            if not settings.TEXT_ONLY_MODE:
-                seen_images = set()
-                
-                # We want to show images associated with the *specific chunks* retrieved.
-                # If a chunk has an image_url, we show it.
+            if context_docs:
                 for doc in context_docs:
                     img_url = doc.metadata.get("image_url")
-                    if img_url and img_url not in seen_images:
-                        # Verify this is a relevant page. 
-                        # If we have chunk_id, it means this is a precise chunk.
-                        sources.append({
-                            "image_url": img_url, 
-                            "title": doc.metadata.get("file_name", "Document"),
-                            "page": doc.metadata.get("page", 0) + 1
-                        })
-                        seen_images.add(img_url)
+                    
+                    # If user does NOT want visuals, we hide the image_url
+                    if not is_visual_intent:
+                        img_url = None
+                    
+                    # If user WANTED visuals, only show if relevant to query (basic check)
+                    # This avoids showing random images from the same page if they don't match
+                    elif img_url:
+                        content_lower = doc.page_content.lower()
+                        query_words = [w for w in query.lower().split() if len(w) > 3]
+                        if not any(word in content_lower for word in query_words):
+                             # If no query words found in this specific chunk content, 
+                             # maybe the image isn't relevant to the specific question
+                             # but we'll be cautious and keep it if it's the top chunk
+                             if doc != context_docs[0]:
+                                 img_url = None
+
+                    source_info = {
+                        "name": doc.metadata.get("file_name", "Source"),
+                        "page": doc.metadata.get("page", "?"),
+                        "image_url": img_url
+                    }
+                    if source_info not in sources:
+                        sources.append(source_info)
             
-            # Send sources immediately if available
             if sources:
                  await websocket.send_text(json.dumps({"type": "chunk", "content": "", "sources": sources}))
 
-            # Format context for LLM (without source labels)
+            # Format context for LLM with detailed metadata and image references
             context_str = ""
             if context_docs:
                 parts = []
                 for doc in context_docs:
+                    source = doc.metadata.get("file_name", "Source")
+                    page = doc.metadata.get("page", "?")
+                    img_url = doc.metadata.get("image_url")
                     content = doc.page_content.replace("\n", " ").strip()
-                    parts.append(content)
+                    
+                    header = f"[Source: {source} (Pg {page})]"
+                    if img_url:
+                        header += f"\n[Image Reference: {img_url}]"
+                    
+                    parts.append(f"{header}\n{content}")
                 context_str = "\n\n---\n\n".join(parts)
 
             # If no context, immediately respond with the required fallback message
